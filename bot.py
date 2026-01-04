@@ -2,7 +2,6 @@ import os
 import time
 import secrets
 import datetime
-from datetime import timedelta
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -39,10 +38,10 @@ app = Client(
 )
 
 # ─────────────────────────────
-# 🎨 FONT & STYLE HELPERS
+# 🎨 HELPERS (Small Caps & Key Gen)
 # ─────────────────────────────
 def smc(text):
-    """Converts text to Small Caps (Aesthetic Font)"""
+    """Small Caps Font Converter"""
     mapping = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
         'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
@@ -55,67 +54,90 @@ def smc(text):
     }
     return "".join(mapping.get(c, c) for c in text)
 
-def generate_key(prefix="sud"):
-    return f"{prefix}-" + secrets.token_hex(6)
+# 🔥 NEW KEY GENERATOR (YUKI + CAPS)
+def generate_key(prefix="YUKI"):
+    # Output: YUKI-A1B2C3D4 (Uppercase)
+    return f"{prefix}-" + secrets.token_hex(6).upper()
 
-async def is_admin(_, __, message):
-    if isinstance(message, CallbackQuery):
-        return message.from_user.id == ADMIN_ID
-    return message.from_user.id == ADMIN_ID
+# Admin Check Filter
+async def is_admin(_, __, update):
+    user_id = update.from_user.id if update.from_user else 0
+    return user_id == ADMIN_ID
 
 admin_filter = filters.create(is_admin)
 
 # ─────────────────────────────
-# 🟢 USER START (WITH BUTTON)
+# 🟢 USER START (/start)
 # ─────────────────────────────
-
 @app.on_message(filters.command("start"))
 async def start(_, m: Message):
-    # Styling with Blockquotes and Small Caps
+    # Telegram Blockquote use karne ke liye formatting specific honi chahiye
+    # Text > ke baad space aur next line proper honi chahiye
+    
     txt = (
-        f"**> {smc('welcome to sudeep music api')}**\n\n"
-        f"> {smc('click the button below to generate your unique api key.')}\n"
-        f"> {smc('free access for')} {FREE_DAYS} {smc('days.')}\n\n"
-        f"👤 {smc('support:')} {ADMIN_CONTACT}"
+        f"**{smc('welcome to sudeep music api')}**\n\n"
+        f"**> {smc('click the button below to generate your unique api key.')}**\n"
+        f"**> {smc('free access for')} {FREE_DAYS} {smc('days.')}**\n\n"
+        f"👤 **{smc('support:')}** {ADMIN_CONTACT}"
     )
     
-    # Direct Button instead of Command
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton(smc("✨ generate api key"), callback_data="user_gen_key")]
     ])
     
+    # quote=True se reply quote mein jayega, Markdown enable hai
     await m.reply(txt, reply_markup=btn, quote=True)
 
 # ─────────────────────────────
-# 🔄 CALLBACK HANDLER (USER & ADMIN)
+# 👑 ADMIN PANEL (/admin) - FIXED
 # ─────────────────────────────
+@app.on_message(filters.command("admin") & admin_filter)
+async def admin_start(_, m: Message):
+    # Ye function NAYA message bhejega, Edit nahi karega. Isliye ab khulega.
+    total = await keys_col.count_documents({})
+    active = await keys_col.count_documents({"active": True})
+    
+    text = (
+        f"**{smc('admin control panel')}**\n\n"
+        f"> 👥 **{smc('total:')}** `{total}`\n"
+        f"> 🟢 **{smc('active:')}** `{active}`\n"
+        f"> 🔴 **{smc('blocked:')}** `{total - active}`"
+    )
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton(smc("🆓 gen free key"), callback_data="gen_manual_free"),
+         InlineKeyboardButton(smc("💎 gen vip key"), callback_data="gen_menu_vip")],
+        [InlineKeyboardButton(smc("📜 manage users"), callback_data="adm_list_0")],
+        [InlineKeyboardButton(smc("❌ close"), callback_data="adm_close")]
+    ])
+    
+    await m.reply(text, reply_markup=buttons)
 
+# ─────────────────────────────
+# 🔄 CALLBACK HANDLER (BUTTONS)
+# ─────────────────────────────
 @app.on_callback_query()
 async def callback_handler(client, callback_query):
     data = callback_query.data
     user_id = callback_query.from_user.id
-
+    
     # ─────────────────────────────
-    # 👤 USER: GENERATE KEY LOGIC
+    # 👤 USER KEY GENERATION
     # ─────────────────────────────
     if data == "user_gen_key":
         doc = await keys_col.find_one({"user_id": user_id})
         
-        # IF KEY EXISTS
+        # OLD USER
         if doc:
             exp_ts = doc.get("expires_at", 0)
             limit = doc.get("daily_limit")
             api_key = doc["api_key"]
             
-            if exp_ts > 3000000000:
-                exp_date = "Lifetime ♾️"
-            else:
-                exp_date = datetime.datetime.fromtimestamp(exp_ts).strftime('%Y-%m-%d')
-
+            exp_date = "Lifetime ♾️" if exp_ts > 3000000000 else datetime.datetime.fromtimestamp(exp_ts).strftime('%Y-%m-%d')
             status = "ᴀᴄᴛɪᴠᴇ ✅" if doc.get("active") else "ʙʟᴏᴄᴋᴇᴅ 🚫"
 
             txt = (
-                f"**> {smc('your api key details')}**\n\n"
+                f"**{smc('your api key details')}**\n\n"
                 f"> 🔑 **{smc('key:')}** `{api_key}`\n"
                 f"> 📊 **{smc('status:')}** {status}\n"
                 f"> 📅 **{smc('expires:')}** `{exp_date}`\n"
@@ -124,8 +146,8 @@ async def callback_handler(client, callback_query):
             await callback_query.edit_message_text(txt)
             return
 
-        # IF NEW USER -> GENERATE FREE KEY
-        api_key = generate_key("free")
+        # NEW USER (FREE KEY YUKI-XXXX)
+        api_key = generate_key("YUKI") # Default Free Prefix
         expires = int(time.time()) + (FREE_DAYS * 86400)
         
         doc = {
@@ -139,11 +161,10 @@ async def callback_handler(client, callback_query):
             "active": True,
             "created_at": datetime.datetime.now()
         }
-
         await keys_col.insert_one(doc)
 
         txt = (
-            f"**> {smc('api key generated successfully')}**\n\n"
+            f"**{smc('api key generated successfully')}**\n\n"
             f"> 🔑 **{smc('key:')}** `{api_key}`\n"
             f"> 📅 **{smc('validity:')}** {FREE_DAYS} {smc('days')}\n"
             f"> 📉 **{smc('limit:')}** {DEFAULT_LIMIT}/{smc('day')}"
@@ -151,21 +172,21 @@ async def callback_handler(client, callback_query):
         await callback_query.edit_message_text(txt)
 
     # ─────────────────────────────
-    # 👑 ADMIN PANEL LOGIC
+    # 👑 ADMIN ACTIONS
     # ─────────────────────────────
     
-    # ❌ CLOSE PANEL
+    # Close
     elif data == "adm_close":
         await callback_query.message.delete()
 
-    # 🏠 ADMIN HOME
+    # Admin Home (Back Button Logic)
     elif data == "adm_home":
         if user_id != ADMIN_ID: return
         total = await keys_col.count_documents({})
         active = await keys_col.count_documents({"active": True})
         
         text = (
-            f"**> {smc('admin control panel')}**\n\n"
+            f"**{smc('admin control panel')}**\n\n"
             f"> 👥 **{smc('total:')}** `{total}`\n"
             f"> 🟢 **{smc('active:')}** `{active}`\n"
             f"> 🔴 **{smc('blocked:')}** `{total - active}`"
@@ -178,21 +199,22 @@ async def callback_handler(client, callback_query):
         ])
         await callback_query.edit_message_text(text, reply_markup=buttons)
 
-    # ⚡ MANUAL GENERATION
+    # Manual Free Key
     elif data == "gen_manual_free":
         if user_id != ADMIN_ID: return
-        key = generate_key("free")
+        key = generate_key("YUKI")
         expires = int(time.time()) + (30 * 86400)
         
         doc = {"api_key": key, "plan": "Free (Manual)", "active": True, "daily_limit": 50, "used_today": 0, "expires_at": expires, "created_at": datetime.datetime.now()}
         await keys_col.insert_one(doc)
         
-        text = f"**> {smc('free key generated')}**\n\n`{key}`\n30 Days"
+        text = f"**{smc('free key generated')}**\n\n`{key}`\n30 Days"
         await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(smc("🔙 back"), callback_data="adm_home")]]))
 
+    # VIP Menu
     elif data == "gen_menu_vip":
         if user_id != ADMIN_ID: return
-        text = f"**> {smc('select vip duration')}**"
+        text = f"**{smc('select vip duration')}**"
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("1 Month", callback_data="gen_vip_30"), InlineKeyboardButton("6 Months", callback_data="gen_vip_180")],
             [InlineKeyboardButton("1 Year", callback_data="gen_vip_365"), InlineKeyboardButton("Lifetime", callback_data="gen_vip_9999")],
@@ -200,18 +222,19 @@ async def callback_handler(client, callback_query):
         ])
         await callback_query.edit_message_text(text, reply_markup=buttons)
 
+    # Generate VIP Key
     elif data.startswith("gen_vip_"):
         if user_id != ADMIN_ID: return
         days = int(data.split("_")[-1])
-        key = generate_key("vip")
+        key = generate_key("YUKI") # VIP Prefix bhi YUKI rakha hai, capital me
         expires_ts = 9999999999 if days > 5000 else int(time.time()) + (days * 86400)
         
         doc = {"api_key": key, "plan": "VIP 💎", "active": True, "daily_limit": 999999, "used_today": 0, "expires_at": expires_ts, "created_at": datetime.datetime.now()}
         await keys_col.insert_one(doc)
-        text = f"**> {smc('vip key generated')}**\n\n`{key}`"
+        text = f"**{smc('vip key generated')}**\n\n`{key}`"
         await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(smc("🔙 back"), callback_data="adm_home")]]))
 
-    # 📜 PAGINATION
+    # List Users
     elif data.startswith("adm_list_"):
         if user_id != ADMIN_ID: return
         page = int(data.split("_")[-1])
@@ -226,9 +249,11 @@ async def callback_handler(client, callback_query):
         btn_list = []
         for user in users:
             status = "🟢" if user.get("active") else "🔴"
-            plan = "💎" if "vip" in user.get("api_key", "") else "🆓"
-            key_short = user['api_key'][:12] + ".."
-            btn_list.append([InlineKeyboardButton(f"{status} {plan} {key_short}", callback_data=f"adm_view_{user['api_key']}")])
+            plan = "💎" if "VIP" in user.get("plan", "") else "🆓"
+            # Key short dikhana (YUKI-A1B2...)
+            key_full = user['api_key']
+            key_short = key_full[:13] + ".." 
+            btn_list.append([InlineKeyboardButton(f"{status} {plan} {key_short}", callback_data=f"adm_view_{key_full}")])
         
         nav_btns = []
         if page > 0: nav_btns.append(InlineKeyboardButton("⬅️", callback_data=f"adm_list_{page-1}"))
@@ -237,9 +262,9 @@ async def callback_handler(client, callback_query):
         btn_list.append(nav_btns)
         btn_list.append([InlineKeyboardButton(smc("🔙 back"), callback_data="adm_home")])
         
-        await callback_query.edit_message_text(f"**> {smc('user list')} - {page+1}**", reply_markup=InlineKeyboardMarkup(btn_list))
+        await callback_query.edit_message_text(f"**{smc('user list')} - {page+1}**", reply_markup=InlineKeyboardMarkup(btn_list))
 
-    # 📊 VIEW USER
+    # View User
     elif data.startswith("adm_view_"):
         if user_id != ADMIN_ID: return
         key = data.split("adm_view_")[1]
@@ -250,7 +275,7 @@ async def callback_handler(client, callback_query):
         used = doc.get("used_today", 0)
         
         text = (
-            f"**> {smc('key statistics')}**\n\n"
+            f"**{smc('key statistics')}**\n\n"
             f"`{key}`\n\n"
             f"> 🏷️ **{smc('plan:')}** {doc.get('plan')}\n"
             f"> 📊 **{smc('status:')}** {status}\n"
@@ -264,7 +289,7 @@ async def callback_handler(client, callback_query):
         buttons = InlineKeyboardMarkup([row, [InlineKeyboardButton(smc("🔙 back"), callback_data="adm_list_0")]])
         await callback_query.edit_message_text(text, reply_markup=buttons)
 
-    # ⚙️ ACTIONS
+    # Actions
     elif data.startswith("adm_act_"):
         if user_id != ADMIN_ID: return
         action, key = data.split("_")[2], data.split("_")[3]
@@ -278,20 +303,15 @@ async def callback_handler(client, callback_query):
         await callback_handler(client, callback_query)
 
 # ─────────────────────────────
-# 👑 ADMIN COMMANDS
+# 👑 MANUAL ADMIN COMMANDS
 # ─────────────────────────────
-@app.on_message(filters.command("admin") & admin_filter)
-async def admin_start(_, m: Message):
-    # Trigger the Home Callback logic manually
-    await callback_handler(app, CallbackQuery(id="0", from_user=m.from_user, data="adm_home", message=m))
-
 @app.on_message(filters.command("setlimit") & admin_filter)
 async def setlimit(_, m: Message):
     try:
         _, key, limit = m.text.split()
         await keys_col.update_one({"api_key": key}, {"$set": {"daily_limit": int(limit)}})
-        await m.reply(f"**> {smc('limit updated successfully')}**")
-    except: await m.reply(f"**> {smc('usage:')}** `/setlimit key 1000`")
+        await m.reply(f"**{smc('limit updated successfully')}**")
+    except: await m.reply(f"**{smc('usage:')}** `/setlimit YUKI-XXXX 1000`")
 
 @app.on_message(filters.command("extend") & admin_filter)
 async def extend(_, m: Message):
@@ -301,14 +321,11 @@ async def extend(_, m: Message):
         if doc:
             new = doc["expires_at"] + (int(days) * 86400)
             await keys_col.update_one({"api_key": key}, {"$set": {"expires_at": new}})
-            await m.reply(f"**> {smc('validity extended')}**")
-    except: await m.reply(f"**> {smc('usage:')}** `/extend key 30`")
+            await m.reply(f"**{smc('validity extended')}**")
+    except: await m.reply(f"**{smc('usage:')}** `/extend YUKI-XXXX 30`")
 
-# ─────────────────────────────
-# RUN
-# ─────────────────────────────
 if __name__ == "__main__":
-    print("🤖 Bot Started with Premium UI...")
+    print("🤖 Bot Started with Fixes...")
     app.start()
     idle()
-
+    
