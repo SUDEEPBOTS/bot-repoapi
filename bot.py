@@ -24,7 +24,7 @@ DEFAULT_LIMIT = 50
 # DATABASE
 # ─────────────────────────────
 mongo = AsyncIOMotorClient(MONGO_URL)
-db = mongo["MusicAPI_DB1"]
+db = mongo["MusicAPI_DB12"]
 keys_col = db["api_users"]
 
 # ─────────────────────────────
