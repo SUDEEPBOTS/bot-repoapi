@@ -183,6 +183,16 @@ async def disable_key(_, m: Message):
         await m.reply("❌ Usage: `/disable user_id`")
 
 # ─────────────────────────────
-# RUN
+# RUN (FIXED)
 # ─────────────────────────────
-app.run()
+import asyncio
+from pyrogram import idle
+
+async def main():
+    await app.start()
+    print("🤖 Bot started successfully")
+    await idle()
+    await app.stop()
+
+if __name__ == "__main__":
+    asyncio.run(main())
