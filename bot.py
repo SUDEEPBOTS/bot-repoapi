@@ -26,6 +26,7 @@ DEFAULT_LIMIT = 50
 mongo = AsyncIOMotorClient(MONGO_URL)
 db = mongo["MusicAPI_DB12"]
 keys_col = db["api_users"]
+videos_col = db["videos_cacht"] # ✅ Songs Count karne ke liye
 
 # ─────────────────────────────
 # BOT SETUP
@@ -54,9 +55,8 @@ def smc(text):
     }
     return "".join(mapping.get(c, c) for c in text)
 
-# 🔥 NEW KEY GENERATOR (YUKI + CAPS)
+# 🔥 KEY GENERATOR
 def generate_key(prefix="YUKI"):
-    # Output: YUKI-A1B2C3D4 (Uppercase)
     return f"{prefix}-" + secrets.token_hex(6).upper()
 
 # Admin Check Filter
@@ -71,9 +71,6 @@ admin_filter = filters.create(is_admin)
 # ─────────────────────────────
 @app.on_message(filters.command("start"))
 async def start(_, m: Message):
-    # Telegram Blockquote use karne ke liye formatting specific honi chahiye
-    # Text > ke baad space aur next line proper honi chahiye
-    
     txt = (
         f"**{smc('welcome to sudeep music api')}**\n\n"
         f"**> {smc('click the button below to generate your unique api key.')}**\n"
@@ -84,24 +81,29 @@ async def start(_, m: Message):
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton(smc("✨ generate api key"), callback_data="user_gen_key")]
     ])
-    
-    # quote=True se reply quote mein jayega, Markdown enable hai
     await m.reply(txt, reply_markup=btn, quote=True)
 
 # ─────────────────────────────
-# 👑 ADMIN PANEL (/admin) - FIXED
+# 👑 ADMIN PANEL (/admin) - UPGRADED
 # ─────────────────────────────
 @app.on_message(filters.command("admin") & admin_filter)
 async def admin_start(_, m: Message):
-    # Ye function NAYA message bhejega, Edit nahi karega. Isliye ab khulega.
-    total = await keys_col.count_documents({})
-    active = await keys_col.count_documents({"active": True})
-    
+    # 1. Basic Counts
+    total_keys = await keys_col.count_documents({})
+    active_keys = await keys_col.count_documents({"active": True})
+    total_songs = await videos_col.count_documents({}) # 🎵 Songs Count
+
+    # 2. Total Usage Calculation (Aggregation)
+    pipeline = [{"$group": {"_id": None, "total": {"$sum": "$total_usage"}}}]
+    cursor = keys_col.aggregate(pipeline)
+    result = await cursor.to_list(length=1)
+    total_requests = result[0]["total"] if result else 0
+
     text = (
         f"**{smc('admin control panel')}**\n\n"
-        f"> 👥 **{smc('total:')}** `{total}`\n"
-        f"> 🟢 **{smc('active:')}** `{active}`\n"
-        f"> 🔴 **{smc('blocked:')}** `{total - active}`"
+        f"👥 **{smc('users:')}** `{total_keys}` (🟢 `{active_keys}`)\n"
+        f"🎵 **{smc('songs:')}** `{total_songs}`\n"
+        f"🔥 **{smc('total hits:')}** `{total_requests}`\n"
     )
     
     buttons = InlineKeyboardMarkup([
@@ -114,7 +116,7 @@ async def admin_start(_, m: Message):
     await m.reply(text, reply_markup=buttons)
 
 # ─────────────────────────────
-# 🔄 CALLBACK HANDLER (BUTTONS)
+# 🔄 CALLBACK HANDLER
 # ─────────────────────────────
 @app.on_callback_query()
 async def callback_handler(client, callback_query):
@@ -122,7 +124,7 @@ async def callback_handler(client, callback_query):
     user_id = callback_query.from_user.id
     
     # ─────────────────────────────
-    # 👤 USER KEY GENERATION
+    # 👤 USER KEY LOGIC
     # ─────────────────────────────
     if data == "user_gen_key":
         doc = await keys_col.find_one({"user_id": user_id})
@@ -132,6 +134,7 @@ async def callback_handler(client, callback_query):
             exp_ts = doc.get("expires_at", 0)
             limit = doc.get("daily_limit")
             api_key = doc["api_key"]
+            used = doc.get("used_today", 0)
             
             exp_date = "Lifetime ♾️" if exp_ts > 3000000000 else datetime.datetime.fromtimestamp(exp_ts).strftime('%Y-%m-%d')
             status = "ᴀᴄᴛɪᴠᴇ ✅" if doc.get("active") else "ʙʟᴏᴄᴋᴇᴅ 🚫"
@@ -141,13 +144,13 @@ async def callback_handler(client, callback_query):
                 f"> 🔑 **{smc('key:')}** `{api_key}`\n"
                 f"> 📊 **{smc('status:')}** {status}\n"
                 f"> 📅 **{smc('expires:')}** `{exp_date}`\n"
-                f"> 📉 **{smc('limit:')}** `{limit}/{smc('day')}`"
+                f"> 📉 **{smc('limit:')}** `{used}/{limit}`"
             )
             await callback_query.edit_message_text(txt)
             return
 
-        # NEW USER (FREE KEY YUKI-XXXX)
-        api_key = generate_key("YUKI") # Default Free Prefix
+        # NEW USER
+        api_key = generate_key("YUKI")
         expires = int(time.time()) + (FREE_DAYS * 86400)
         
         doc = {
@@ -157,6 +160,7 @@ async def callback_handler(client, callback_query):
             "expires_at": expires,
             "daily_limit": DEFAULT_LIMIT,
             "used_today": 0,
+            "total_usage": 0, # ✅ Init Total Usage
             "last_reset": str(datetime.date.today()),
             "active": True,
             "created_at": datetime.datetime.now()
@@ -174,22 +178,27 @@ async def callback_handler(client, callback_query):
     # ─────────────────────────────
     # 👑 ADMIN ACTIONS
     # ─────────────────────────────
-    
-    # Close
     elif data == "adm_close":
         await callback_query.message.delete()
 
-    # Admin Home (Back Button Logic)
     elif data == "adm_home":
         if user_id != ADMIN_ID: return
-        total = await keys_col.count_documents({})
-        active = await keys_col.count_documents({"active": True})
         
+        # Recalculate Stats
+        total_keys = await keys_col.count_documents({})
+        active_keys = await keys_col.count_documents({"active": True})
+        total_songs = await videos_col.count_documents({})
+        
+        pipeline = [{"$group": {"_id": None, "total": {"$sum": "$total_usage"}}}]
+        cursor = keys_col.aggregate(pipeline)
+        result = await cursor.to_list(length=1)
+        total_requests = result[0]["total"] if result else 0
+
         text = (
             f"**{smc('admin control panel')}**\n\n"
-            f"> 👥 **{smc('total:')}** `{total}`\n"
-            f"> 🟢 **{smc('active:')}** `{active}`\n"
-            f"> 🔴 **{smc('blocked:')}** `{total - active}`"
+            f"👥 **{smc('users:')}** `{total_keys}` (🟢 `{active_keys}`)\n"
+            f"🎵 **{smc('songs:')}** `{total_songs}`\n"
+            f"🔥 **{smc('total hits:')}** `{total_requests}`\n"
         )
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton(smc("🆓 gen free key"), callback_data="gen_manual_free"),
@@ -199,19 +208,16 @@ async def callback_handler(client, callback_query):
         ])
         await callback_query.edit_message_text(text, reply_markup=buttons)
 
-    # Manual Free Key
+    # Manual Keys
     elif data == "gen_manual_free":
         if user_id != ADMIN_ID: return
         key = generate_key("YUKI")
         expires = int(time.time()) + (30 * 86400)
-        
-        doc = {"api_key": key, "plan": "Free (Manual)", "active": True, "daily_limit": 50, "used_today": 0, "expires_at": expires, "created_at": datetime.datetime.now()}
+        doc = {"api_key": key, "plan": "Free (Manual)", "active": True, "daily_limit": 50, "used_today": 0, "total_usage": 0, "expires_at": expires, "created_at": datetime.datetime.now()}
         await keys_col.insert_one(doc)
-        
         text = f"**{smc('free key generated')}**\n\n`{key}`\n30 Days"
         await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(smc("🔙 back"), callback_data="adm_home")]]))
 
-    # VIP Menu
     elif data == "gen_menu_vip":
         if user_id != ADMIN_ID: return
         text = f"**{smc('select vip duration')}**"
@@ -222,14 +228,12 @@ async def callback_handler(client, callback_query):
         ])
         await callback_query.edit_message_text(text, reply_markup=buttons)
 
-    # Generate VIP Key
     elif data.startswith("gen_vip_"):
         if user_id != ADMIN_ID: return
         days = int(data.split("_")[-1])
-        key = generate_key("YUKI") # VIP Prefix bhi YUKI rakha hai, capital me
+        key = generate_key("YUKI")
         expires_ts = 9999999999 if days > 5000 else int(time.time()) + (days * 86400)
-        
-        doc = {"api_key": key, "plan": "VIP 💎", "active": True, "daily_limit": 999999, "used_today": 0, "expires_at": expires_ts, "created_at": datetime.datetime.now()}
+        doc = {"api_key": key, "plan": "VIP 💎", "active": True, "daily_limit": 999999, "used_today": 0, "total_usage": 0, "expires_at": expires_ts, "created_at": datetime.datetime.now()}
         await keys_col.insert_one(doc)
         text = f"**{smc('vip key generated')}**\n\n`{key}`"
         await callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(smc("🔙 back"), callback_data="adm_home")]]))
@@ -250,7 +254,6 @@ async def callback_handler(client, callback_query):
         for user in users:
             status = "🟢" if user.get("active") else "🔴"
             plan = "💎" if "VIP" in user.get("plan", "") else "🆓"
-            # Key short dikhana (YUKI-A1B2...)
             key_full = user['api_key']
             key_short = key_full[:13] + ".." 
             btn_list.append([InlineKeyboardButton(f"{status} {plan} {key_short}", callback_data=f"adm_view_{key_full}")])
@@ -264,7 +267,7 @@ async def callback_handler(client, callback_query):
         
         await callback_query.edit_message_text(f"**{smc('user list')} - {page+1}**", reply_markup=InlineKeyboardMarkup(btn_list))
 
-    # View User
+    # View User - NOW SHOWS CORRECT USAGE
     elif data.startswith("adm_view_"):
         if user_id != ADMIN_ID: return
         key = data.split("adm_view_")[1]
@@ -272,14 +275,17 @@ async def callback_handler(client, callback_query):
         if not doc: return await callback_query.answer("Not found")
 
         status = "Active ✅" if doc.get("active") else "Blocked 🚫"
-        used = doc.get("used_today", 0)
+        used_today = doc.get("used_today", 0)
+        total_usage = doc.get("total_usage", 0) # ✅ Fetch Total Usage
+        limit = doc.get("daily_limit")
         
         text = (
             f"**{smc('key statistics')}**\n\n"
             f"`{key}`\n\n"
             f"> 🏷️ **{smc('plan:')}** {doc.get('plan')}\n"
             f"> 📊 **{smc('status:')}** {status}\n"
-            f"> 📉 **{smc('used:')}** `{used}`"
+            f"> 📉 **{smc('today:')}** `{used_today}/{limit}`\n"
+            f"> 🔥 **{smc('total:')}** `{total_usage}`" # ✅ New Line
         )
         row = []
         if doc.get("active"): row.append(InlineKeyboardButton(smc("block"), callback_data=f"adm_act_block_{key}"))
@@ -299,11 +305,12 @@ async def callback_handler(client, callback_query):
             await keys_col.delete_one({"api_key": key})
             return await callback_handler(client, CallbackQuery(id="0", from_user=callback_query.from_user, data="adm_list_0", message=callback_query.message))
         
+        # Refresh View
         callback_query.data = f"adm_view_{key}"
         await callback_handler(client, callback_query)
 
 # ─────────────────────────────
-# 👑 MANUAL ADMIN COMMANDS
+# 👑 COMMANDS
 # ─────────────────────────────
 @app.on_message(filters.command("setlimit") & admin_filter)
 async def setlimit(_, m: Message):
@@ -325,7 +332,7 @@ async def extend(_, m: Message):
     except: await m.reply(f"**{smc('usage:')}** `/extend YUKI-XXXX 30`")
 
 if __name__ == "__main__":
-    print("🤖 Bot Started with Fixes...")
+    print("🤖 Admin Bot Started...")
     app.start()
     idle()
-    
+        
