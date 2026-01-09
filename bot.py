@@ -15,7 +15,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 MONGO_URL = os.getenv("MONGO_DB_URI", "")
 
 ADMIN_ID = 6356015122
-ADMIN_CONTACT = "@Kaito_3_2"
+ADMIN_CONTACT = "zyroo100"
 
 FREE_DAYS = 2
 DEFAULT_LIMIT = 50
